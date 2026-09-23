@@ -198,6 +198,8 @@ export async function serveCanopy(options: {
     firstWriter?: { handle: string; profileTree: string; name?: string };
   };
   accounts?: CanopyBootstrapAccount[];
+  /** Admit any self-certifying profile that claims a free handle as a community member. */
+  openEnrollment?: boolean;
   port?: number;
   hostname?: string;
   queryRuntime?: QueryStreamRuntime;
@@ -214,6 +216,7 @@ export async function serveCanopy(options: {
     ...(options.community?.firstWriter ? { firstWriter: options.community.firstWriter } : {}),
   }, options.mergeTool);
   if (!dynamicLoopbackOrigin) canopy.setCommunityHost(new URL(publicOrigin).host);
+  canopy.openEnrollment = options.openEnrollment ?? false;
   const pairingClaimAttempts = new Map<string, number[]>();
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 4318),
@@ -388,7 +391,9 @@ export async function serveCanopy(options: {
           };
           let accountURL: URL | undefined;
           try { if (typeof body.account === "string") accountURL = new URL(body.account); } catch {}
-          const reservation = accountURL?.origin === publicOrigin ? canopy.accountReservation(body.account as string) : null;
+          const reservation = accountURL?.origin === publicOrigin
+            ? canopy.accountReservation(body.account as string, typeof body.profileTree === "string" ? body.profileTree : undefined)
+            : null;
           if (
             !reservation || typeof body.profileTree !== "string" || typeof body.configurationTree !== "string"
             || !body.challenge || typeof body.publicKey !== "string" || typeof body.signature !== "string"

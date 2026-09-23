@@ -209,6 +209,11 @@ export class CanopyDaemon implements AsyncDisposable {
   readonly execution: ExecutionAuthority;
   private readonly accounts: AccountDirectory;
   private observationListeners = new Map<string, Set<(record: ObservationRecord) => void>>();
+  /**
+   * Open enrollment: any self-certifying person profile may claim an
+   * unreserved handle, and the host records it as a community member.
+   */
+  openEnrollment = false;
   private updateLocks = new Map<string, Promise<void>>();
 
   private constructor(
@@ -574,7 +579,7 @@ export class CanopyDaemon implements AsyncDisposable {
       throw new Error(matches.length ? "Several reservations match this identity; enter an exact account URL" : "This community has not reserved an account for this identity");
     }
     const account = input.account ?? `${input.origin}/~${matches[0]![0]}`;
-    const reservation = this.accountReservation(account);
+    const reservation = this.accountReservation(account, input.profileTree);
     if (!reservation?.profileTree || reservation.profileTree !== input.profileTree) {
       throw new Error("Account challenge requires an exact profile reservation");
     }
@@ -721,14 +726,34 @@ export class CanopyDaemon implements AsyncDisposable {
     );
   }
 
-  accountReservation(locator: string): { handle: string; profileTree?: string } | null {
+  /**
+   * The reservation for an account locator. With open enrollment, a claimant
+   * that names its profile also receives a reservation for any free handle,
+   * provided that profile is not already a member under another handle.
+   */
+  accountReservation(locator: string, claimant?: string): { handle: string; profileTree?: string; open?: true } | null {
     let url: URL;
     try { url = new URL(locator); } catch { return null; }
     const host = (this.db.query("SELECT value FROM meta WHERE key = 'community_host'").get() as { value: string } | null)?.value;
     const match = /^\/~([a-z0-9][a-z0-9-]{0,62})\/?$/.exec(url.pathname);
     if (!match || !host || url.host.toLowerCase() !== host) return null;
-    const reservation = this.communityAccountReservations().get(match[1]!);
-    return reservation ? { handle: match[1]!, ...reservation } : null;
+    const handle = match[1]!;
+    const reservations = this.communityAccountReservations();
+    const reservation = reservations.get(handle);
+    if (reservation) return { handle, ...reservation };
+    if (
+      !this.openEnrollment || !claimant || !isPersonProfileTreeID(claimant)
+      || this.accountByHandle(handle) || this.boundary(`/~${handle}`)
+      || [...reservations.values()].some((candidate) => candidate.profileTree === claimant)
+      || this.db.query("SELECT 1 FROM accounts WHERE profile_tree = ?").get(claimant)
+    ) return null;
+    return { handle, profileTree: claimant, open: true };
+  }
+
+  /** Members admitted by open enrollment, recorded by the host rather than authored in the community tree. */
+  private enrolledMembers(): Array<{ profile: string; handle: string }> {
+    return (this.db.query("SELECT key, value FROM meta WHERE key LIKE 'enrolled:%' ORDER BY key").all() as Array<{ key: string; value: string }>)
+      .map((row) => ({ profile: `arbor://${row.value}/`, handle: row.key.slice("enrolled:".length) }));
   }
 
   private firstWriterHandle(): string | null {
@@ -1029,7 +1054,7 @@ export class CanopyDaemon implements AsyncDisposable {
       configurationRoot: input.configurationSnapshot.root,
     }));
     if (!HANDLE.test(input.handle)) throw new Error(`Invalid account handle: ${input.handle}`);
-    const reservation = this.accountReservation(input.accountLocator);
+    const reservation = this.accountReservation(input.accountLocator, input.profileTree);
     if (!reservation || reservation.handle !== input.handle) throw new Error("Account locator is not reserved by this community");
     if (!isPersonProfileTreeID(input.profileTree) || !isGeneratedArborID(input.configurationTree, "tr")) {
       throw new Error("Account join requires profile and configuration TreeIDs");
@@ -1050,7 +1075,7 @@ export class CanopyDaemon implements AsyncDisposable {
     if (challengeRow.expires_at <= Date.now()) throw new Error("Account challenge is expired");
     if (challengeRow.consumed_at !== null) throw new Error("Account challenge was already consumed");
     if (this.boundary(`/~${input.handle}`)) throw new AlreadyClaimedError(input.handle);
-    if (!this.communityMemberHandles().has(input.handle)) {
+    if (!reservation.open && !this.communityMemberHandles().has(input.handle)) {
       throw new Error(`Profile is not reserved by the community: ~${input.handle}`);
     }
     await this.validateGraph(input.configurationSnapshot.root, input.configurationSnapshot.objects);
@@ -1108,6 +1133,9 @@ export class CanopyDaemon implements AsyncDisposable {
           "INSERT INTO tree_reservations (id, account_id, canonical_path, status) VALUES (?, ?, ?, 'awaiting-initialization')",
           [id, accountID, new URL(declaration.canonical).pathname],
         );
+      }
+      if (reservation.open) {
+        this.db.run("INSERT INTO meta (key, value) VALUES (?, ?)", [`enrolled:${input.handle}`, input.profileTree]);
       }
       if (firstWriter) {
         this.access.set(this.community().id, "profile", input.profileTree, "write");
@@ -2560,9 +2588,11 @@ export class CanopyDaemon implements AsyncDisposable {
     const row = this.db.query("SELECT value FROM meta WHERE key = ?").get(`profile:${root}`) as { value: string } | null;
     if (!row) return { type: null, members: [] };
     const value = JSON.parse(row.value) as { type?: unknown; members?: unknown };
+    // Enrolled members belong to the community's current root only.
+    const enrolled = root === this.boundary("/")?.ref ? this.enrolledMembers() : [];
     return {
       type: value.type === "person" || value.type === "group" ? value.type : null,
-      members: Array.isArray(value.members) ? value.members.flatMap((member) => {
+      members: [...enrolled, ...(Array.isArray(value.members) ? value.members : [])].flatMap((member) => {
         if (typeof member === "string") return [{ profile: member, legacy: true as const }];
         if (!member || typeof member !== "object" || Array.isArray(member)) return [];
         const candidate = member as Record<string, unknown>;
@@ -2572,7 +2602,7 @@ export class CanopyDaemon implements AsyncDisposable {
           ...(typeof candidate.handle === "string" ? { handle: candidate.handle } : {}),
           ...(candidate.legacy === true ? { legacy: true as const } : {}),
         }];
-      }) : [],
+      }),
     };
   }
 

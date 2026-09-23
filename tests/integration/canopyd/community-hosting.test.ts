@@ -573,3 +573,59 @@ test("clearing every rule does not let a legacy writer restore privileges", asyn
   legacy.trees[bobProfileTree]!.access = [{ subject: { kind: "everyone" }, access: "write" }];
   await expect(client.submitUpdate(config, cleared.update.id, snapshotAccountConfigV2(legacy))).rejects.toThrow(/Legacy policy writes/);
 });
+
+describe("open enrollment", () => {
+  test("admits any self-certifying profile claiming a free handle as a community member", async () => {
+    const founder = testProfileIdentity();
+    const host = await serveCanopy({
+      dataRoot: join(sandbox, "open-enrollment"),
+      publicOrigin: "http://127.0.0.1:0",
+      hostname: "127.0.0.1",
+      port: 0,
+      openEnrollment: true,
+      community: { handle: "open", name: "Open", firstWriter: { handle: "founder", profileTree: founder.profileTree } },
+    });
+    const origin = () => new URL(host.url).origin;
+    async function claim(identity: ReturnType<typeof testProfileIdentity>, handle: string) {
+      const configurationTree = generateArborID("tr");
+      const deviceID = generateArborID("dv");
+      const account = `${origin()}/~${handle}`;
+      const challenge = await new WireClient(host.url).createAccountChallenge({ account, profileTree: identity.profileTree, configurationTree });
+      return new WireClient(host.url).joinAccount({
+        account,
+        profileTree: identity.profileTree,
+        configurationTree,
+        challenge,
+        publicKey: identity.publicKey,
+        signature: identity.sign(challenge),
+        device: { id: deviceID, label: "Laptop", credentialDigest: `sha256:${sha256(`${handle}-credential`)}` as const },
+        configuration: snapshotAccountConfigV2({
+          account: { canopy: origin(), profile: identity.profileTree },
+          trees: {},
+          devices: { [deviceID]: { id: deviceID, label: "Laptop", administrator: true } },
+        }),
+      });
+    }
+    try {
+      const carol = testProfileIdentity();
+      const joined = await claim(carol, "carol");
+      expect(joined.account).toMatchObject({ handle: "carol", profileTree: carol.profileTree });
+      expect(host.canopy.communityMembers()).toContainEqual({ profile: `arbor://${carol.profileTree}/`, handle: "carol" });
+      expect(host.canopy.isReservedHandle("carol")).toBe(false);
+
+      // A handle goes to its first claimant, and a profile joins under one handle.
+      await expect(claim(testProfileIdentity(), "carol")).rejects.toThrow();
+      await expect(claim(carol, "carol-two")).rejects.toThrow("exact profile reservation");
+      // The founder's reservation still names only the founder.
+      await expect(claim(testProfileIdentity(), "founder")).rejects.toThrow("exact profile reservation");
+
+      // Turning enrollment off keeps existing members and admits nobody new.
+      host.canopy.openEnrollment = false;
+      expect(host.canopy.communityMembers().some((member) => member.handle === "carol")).toBe(true);
+      await expect(claim(testProfileIdentity(), "dave")).rejects.toThrow("exact profile reservation");
+    } finally {
+      host.server.stop(true);
+      await host.canopy[Symbol.asyncDispose]();
+    }
+  });
+});

@@ -184,6 +184,7 @@ export async function serveCommunity(args: string[]): Promise<void> {
       publicOrigin,
       community: { handle: communityHandle, name: communityHandle, ...(firstWriter ? { firstWriter } : {}) },
       accounts,
+      openEnrollment: process.env.ARBOR_OPEN_ENROLLMENT === "1",
       port: requestedPort,
       hostname: hostnameOption(args),
     });
@@ -210,6 +211,7 @@ export async function serveCommunity(args: string[]): Promise<void> {
   console.log(`${existingCanopy ? "Serving" : "Created and serving"} ${running.canopy.communityHandle()} at ${running.url}`);
   console.log(`Data: ${dataRoot}`);
   const unclaimed = running.canopy.unclaimedFounderHandle();
+  if (running.canopy.openEnrollment) console.log("Open enrollment: any profile may claim a free handle and join the community.");
   if (unclaimed) {
     if (new URL(publicOrigin).port === "0") {
       throw new Error("A community whose founder account is still unclaimed needs a stable nonzero --port or an explicit --url");

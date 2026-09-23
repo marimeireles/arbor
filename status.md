@@ -449,3 +449,17 @@ typecheck, build, links, and whitespace checks passed. The 50,000-file gate
 passed (217 ms startup, 17.06 s cold walk, 2.81 s warm, 2.61 s incremental).
 The disposable five-tree schema-15 copy passed a full integrity audit with its
 account, device, access, boundary, reservation, policy, and tree rows unchanged.
+
+### Open enrollment — 2026-09-23
+
+Implemented, not deployed to the public host: `ARBOR_OPEN_ENROLLMENT=1` lets
+any self-certifying person profile claim a free `/~handle` without an authored
+reservation. The host records the claimant as a community member beside the
+`members:` list, so it counts for reservations, community group access, and
+the directory. One handle per profile; authored reservations are unchanged.
+See [the deployment guide](packages/canopyd/deploy/README.md#canopyd-runtime-environment).
+
+Verification with Bun 1.3.14 in a Linux container: typecheck unchanged from
+HEAD (two existing errors in the migration 013 test); the canopyd suites pass
+470 with the one existing keyring-dependent failure; the full product suite has
+1,134 passes and the same 14 container-environment failures as untouched HEAD.

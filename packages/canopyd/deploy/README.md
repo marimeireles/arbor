@@ -93,6 +93,7 @@ canopyd reads these variables at start; all are optional.
 | `ARBOR_STATE_PROOF_MB` | 64 | Ceiling for one retained-state proof. Live proofs weigh about 36 MB; a lower ceiling silently rejects every proof and re-validates each request. |
 | `ARBOR_HISTORY_CACHE_MB` | 256 | History validation cache. A 16 MB cache thrashed and gave no benefit. |
 | `ARBOR_CANOPY_NO_WARMUP` | unset | Set to skip the background warm-up of every tree's current semantic state at startup; the first edit after a restart then pays that cost. |
+| `ARBOR_OPEN_ENROLLMENT` | unset | Set to `1` to let any self-certifying person profile claim a free `/~handle` without a reservation. The host records each such claimant as a community member (in `meta` as `enrolled:<handle>`, not in the community tree's `members:` list), so it gains the community's group access. A profile joins under one handle, and authored reservations still bind their exact profile. Anyone who can reach the host can join, so use it only behind an access boundary such as a private network. |
 | `ARBOR_MERGE_EXECUTABLE` | the workspace `arbor-merge` | Alternate merge worker; see [the merge tool](../../../docs/architecture/canopyd/merge-tool.md#running-and-configuring). |
 
 ### Health and readiness
